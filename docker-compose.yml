@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  reminder:
+    image: kintoyyy/mikrotik-payment-reminder:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./uploads:/var/www/html/uploads
+      - ./database.sqlite:/var/www/html/database.sqlite
+    restart: always

@@ -1,6 +1,16 @@
 <?php
-$db = new PDO('sqlite:database.sqlite');
-$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+if (!file_exists('database.sqlite')) {
+    header('Location: /upload.php');
+    exit;
+}
+
+try {
+    $db = new PDO('sqlite:database.sqlite');
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (Exception $e) {
+    header('Location: /upload.php');
+    exit;
+}
 
 $settings = $db->query("SELECT * FROM settings LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 $duration = max(1, intval($settings['carousel_duration'] ?? 5)) * 1000;
