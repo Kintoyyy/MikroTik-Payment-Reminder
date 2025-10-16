@@ -18,9 +18,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['image'])) {
     $file = $_FILES['image'];
     if ($file['error'] === UPLOAD_ERR_OK) {
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        $filename = random_filename($ext);
-        move_uploaded_file($file['tmp_name'], $uploadDir . $filename);
-        $message = "✅ Image uploaded successfully: " . htmlspecialchars($filename);
+        $allowed = ['jpg', 'jpeg', 'png', 'gif'];
+
+        $mime = mime_content_type($file['tmp_name']);
+        $allowedMime = ['image/jpeg', 'image/png', 'image/gif'];
+
+        if (!in_array($ext, $allowed) || !in_array($mime, $allowedMime)) {
+            $message = "❌ Invalid file type. Only JPG, JPEG, PNG, and GIF allowed.";
+        } else {
+            $filename = random_filename($ext);
+            move_uploaded_file($file['tmp_name'], $uploadDir . $filename);
+            $message = "✅ Image uploaded successfully: " . htmlspecialchars($filename);
+        }
     } else {
         $message = "⚠️ Upload failed.";
     }
@@ -80,9 +89,10 @@ $images = array_values(array_diff(scandir($uploadDir), ['.', '..']));
             <h5>Upload New Image</h5>
             <form method="POST" enctype="multipart/form-data" class="mt-3">
                 <div class="input-group">
-                    <input type="file" name="image" class="form-control" required>
+                    <input type="file" name="image" accept=".jpg,.jpeg,.png,.gif" class="form-control" required>
                     <button type="submit" class="btn btn-primary">Upload</button>
                 </div>
+                <small class="text-muted">Allowed formats: JPG, JPEG, PNG, GIF</small>
             </form>
         </div>
     </div>
