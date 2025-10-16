@@ -4,3 +4,4 @@ database.sqlite
 .gitignore
 node_modules
 .DS_Store
+mikrotik-config.rsc
