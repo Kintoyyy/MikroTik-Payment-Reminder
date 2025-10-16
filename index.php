@@ -2,16 +2,16 @@
 $db = new PDO('sqlite:database.sqlite');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-// Get selected images
 $settings = $db->query("SELECT * FROM settings LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+$displayMode = $settings['display_mode'] ?? 'single';
 
-// Detect device type
 $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
 $isMobile = preg_match('/mobile|android|iphone|ipad|tablet/i', $userAgent);
 
 $imageDir = __DIR__ . '/uploads/';
-$image = $isMobile ? $settings['mobile_image'] : $settings['pc_image'];
-$imagePath = $image ? $imageDir . $image : null;
+$images = array_values(array_diff(scandir($imageDir), ['.', '..']));
+
+$selected = $isMobile ? $settings['mobile_image'] : $settings['pc_image'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -23,42 +23,42 @@ $imagePath = $image ? $imageDir . $image : null;
         html, body {
             margin: 0;
             padding: 0;
-            height: 100%;
-            width: 100%;
             background: #000;
             overflow: hidden;
+            height: 100%;
+            width: 100%;
         }
-        .wrapper {
-            display: flex;
-            justify-content: center;
-            align-items: center;
+        .carousel-item img, .single-image {
+            width: 100%;
             height: 100vh;
-            width: 100vw;
-            background: #000;
-        }
-        img.responsive-fit {
-            max-width: 100%;
-            max-height: 100%;
-            width: auto;
-            height: auto;
             object-fit: contain;
-            object-position: center;
-            display: block;
-        }
-        .no-image {
-            color: #fff;
-            font-size: 1.8rem;
-            text-align: center;
+            background: #000;
         }
     </style>
 </head>
 <body>
-<div class="wrapper">
-<?php if ($image && file_exists($imagePath)): ?>
-    <img src="uploads/<?= htmlspecialchars($image) ?>" alt="Reminder" class="responsive-fit">
+<?php if ($displayMode === 'carousel' && $images): ?>
+    <div id="imageCarousel" class="carousel slide carousel-fade" data-bs-ride="carousel">
+        <div class="carousel-inner">
+            <?php foreach ($images as $index => $img): ?>
+                <div class="carousel-item <?= $index === 0 ? 'active' : '' ?>">
+                    <img src="uploads/<?= htmlspecialchars($img) ?>" class="d-block w-100" alt="Slide">
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const carousel = new bootstrap.Carousel('#imageCarousel', {
+            interval: 5000,  // change every 5 seconds
+            ride: 'carousel',
+            pause: false
+        });
+    </script>
+<?php elseif ($selected && file_exists($imageDir . $selected)): ?>
+    <img src="uploads/<?= htmlspecialchars($selected) ?>" class="single-image" alt="Reminder">
 <?php else: ?>
-    <div class="no-image">No image selected yet.</div>
+    <div class="text-light fs-3 text-center" style="margin-top:20%;">No image selected yet.</div>
 <?php endif; ?>
-</div>
 </body>
 </html>
