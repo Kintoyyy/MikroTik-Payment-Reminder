@@ -97,100 +97,156 @@ Changes are saved automatically in the local **SQLite database** (`database.sqli
 
 ---
 
-## 🔧 Example: Running on MikroTik RouterOS v7 (Container Support)
 
-> Tested on RouterOS 7.14+ with Docker-compatible container support.
+## 🚀 Deploying “MikroTik Payment Reminder” on RouterOS v7 (with Container Support)
 
-### 1. Create required mounts
+> 🧩 **Tested on:** RouterOS v7.14+
+> ⚙️ **Requirements:**
+>
+> * Router with container support (e.g., RB5009, CHR, x86)
+> * Sufficient storage (e.g., `disk1`)
+> * Internet access for pulling Docker images
+
+---
+
+### 1️⃣ Enable Container Package
 
 ```rsc
-/container mounts
+/system/device-mode/update container=yes
+# Reboot after enabling
+/system/reboot
+```
+
+---
+
+### 2️⃣ Create Required Mounts
+
+```rsc
+/container/mounts
 add dst="/uploads" name=MOUNT_PAYMENT_UPLOADS src="/var/www/html/uploads"
 add dst="/database.sqlite" name=MOUNT_SQLITE src="/var/www/html/database.sqlite"
 ```
 
-### 2. Create bridge and veth interface
+---
+
+### 3️⃣ Create Bridge and VETH Interface
 
 ```rsc
-/interface bridge
+/interface/bridge
 add name=containers
 
-/interface veth
-add address=172.17.0.2/30 gateway=172.17.0.1 name=veth-payment-reminder
+/interface/veth
+add name=veth-payment-reminder address=172.17.0.2/30 gateway=172.17.0.1
 
-/interface bridge port
+/interface/bridge/port
 add bridge=containers interface=veth-payment-reminder
 ```
 
-### 3. Configure container
+---
+
+### 4️⃣ Configure the Container
 
 ```rsc
-/container config
+/container/config
 set registry-url="https://registry-1.docker.io" tmpdir="disk1/tmp"
 
 /container
-add interface=veth-payment-reminder logging=yes mounts=MOUNT_PAYMENT_UPLOADS,MOUNT_SQLITE name="kintoyyy/mikrotik-payment-reminder:latest" root-dir="disk1/images/payment-reminder" workdir="/"
+add name="mikrotik-payment-reminder" \
+    interface=veth-payment-reminder \
+    logging=yes \
+    mounts=MOUNT_PAYMENT_UPLOADS,MOUNT_SQLITE \
+    root-dir="disk1/images/payment-reminder" \
+    remote-image="kintoyyy/mikrotik-payment-reminder" \
+    workdir="/"
+
+# Start the container
+/container/start mikrotik-payment-reminder
 ```
 
-### 4. Assign IP and NAT rules
+---
+
+### 5️⃣ Configure Network and NAT Rules
 
 ```rsc
-/ip address
+/ip/address
 add address=172.17.0.1/30 interface=containers network=172.17.0.0
 
-/ip firewall nat
-add action=masquerade chain=srcnat src-address=172.17.0.0/30
-add action=dst-nat chain=dstnat dst-port=80 protocol=tcp to-addresses=172.17.0.2 to-ports=80
+/ip/firewall/nat
+add chain=srcnat action=masquerade src-address=172.17.0.0/30
+add chain=dstnat action=dst-nat protocol=tcp dst-port=80 \
+    to-addresses=172.17.0.2 to-ports=80
 ```
 
-### 5. Create PPP profile for expired users
+---
+
+### 6️⃣ Create PPP Profile for Expired Users
 
 ```rsc
-/ip pool
+/ip/pool
 add name=EXPIRED ranges=10.254.0.10-10.254.0.250
 
-/ppp profile
-add address-list=EXPIRED dns-server=172.17.0.1 local-address=10.254.0.1 name=EXPIRED rate-limit=128k/128k remote-address=EXPIRED
+/ppp/profile
+add name=EXPIRED local-address=10.254.0.1 remote-address=EXPIRED \
+    dns-server=172.17.0.1 address-list=EXPIRED rate-limit=128k/128k
 ```
 
-### 6. Restrict expired users and redirect to reminder page
+---
+
+### 7️⃣ Restrict Expired Users & Redirect to Reminder Page
 
 ```rsc
-/ip firewall address-list
-add address=172.17.0.2 list=WHITELIST
+/ip/firewall/address-list
+add list=WHITELIST address=172.17.0.2
 
-/ip firewall nat
-add action=redirect chain=dstnat dst-address-list=!WHITELIST dst-port=80,443 protocol=tcp src-address-list=EXPIRED to-ports=8082
+/ip/firewall/nat
+add chain=dstnat action=redirect to-ports=8082 protocol=tcp \
+    src-address-list=EXPIRED dst-port=80,443 dst-address-list=!WHITELIST
 
-/ip firewall filter
-add action=drop chain=forward dst-address-list=!WHITELIST dst-port=80,443 protocol=tcp src-address-list=EXPIRED
+/ip/firewall/filter
+add chain=forward action=drop protocol=tcp src-address-list=EXPIRED \
+    dst-port=80,443 dst-address-list=!WHITELIST
 ```
 
-### 7. Configure MikroTik proxy for redirection
+---
+
+### 8️⃣ Configure MikroTik Proxy for Redirection
 
 ```rsc
-/ip proxy
-set enabled=yes port=8082
+/ip/proxy
+set enabled=yes port=8082 parent-proxy=0.0.0.0
 
-/ip proxy access
-add dst-port=8082 src-address=10.254.0.0/24
-add action=redirect action-data=172.17.0.2:80 dst-address=!172.17.0.1 dst-host=!172.17.0.2 dst-port=80,443 src-address=10.254.0.0/24
+/ip/proxy/access
+remove [find]
+add action=allow src-address=10.254.0.0/24
+add action=redirect redirect-to=172.17.0.2:80 \
+    src-address=10.254.0.0/24 dst-port=80,443
 add action=deny src-address=10.254.0.0/24
 ```
 
-#### 🔐 Access the Admin Panel
+---
 
-Open your browser and go to:
+### 9️⃣ Access the Admin Panel
+
+Once the container is running and NAT configured, open:
 
 ```
-http://172.17.0.2:80/upload.php
+http://172.17.0.2/upload.php
 ```
 
-**Default credentials:**
+**Default Credentials:**
 
 ```
 Username: admin
 Password: admin
+```
+
+---
+
+### ✅ Optional: Check Container Status
+
+```rsc
+/container/print
+/container/logs mikrotik-payment-reminder follow=yes
 ```
 
 ---
