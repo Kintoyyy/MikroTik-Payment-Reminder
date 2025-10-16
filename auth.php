@@ -15,10 +15,10 @@ function require_auth() {
     $count = $db->query("SELECT COUNT(*) FROM users")->fetchColumn();
     if ($count == 0) {
         $username = 'admin';
-        $password = password_hash('password123', PASSWORD_DEFAULT);
+        $password = password_hash('admin', PASSWORD_DEFAULT);
         $stmt = $db->prepare("INSERT INTO users (username, password) VALUES (?, ?)");
         $stmt->execute([$username, $password]);
-        error_log("SQLite initialized with default credentials: admin / password123");
+        error_log("SQLite initialized with default credentials: admin / admin");
     }
 
     // Basic auth prompt
