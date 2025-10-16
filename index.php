@@ -18,7 +18,7 @@ $selected = $isMobile ? $settings['mobile_image'] : $settings['pc_image'];
 <head>
     <meta charset="UTF-8">
     <title>Payment Reminder</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="./src/bootstrap.min.css" rel="stylesheet">
     <style>
         html, body {
             margin: 0;
@@ -47,10 +47,10 @@ $selected = $isMobile ? $settings['mobile_image'] : $settings['pc_image'];
             <?php endforeach; ?>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="./src/bootstrap.bundle.min.js"></script>
     <script>
         const carousel = new bootstrap.Carousel('#imageCarousel', {
-            interval: 5000,  // change every 5 seconds
+            interval: <?= ($settings['carousel_duration'] ?? 5) * 1000 ?>,
             ride: 'carousel',
             pause: false
         });
