@@ -11,23 +11,19 @@ $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 // Ensure settings table exists
 $db->exec("CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY,
-    pc_image TEXT,
-    mobile_image TEXT
+    display_mode TEXT DEFAULT 'carousel',
+    carousel_duration INTEGER DEFAULT 5
 )");
 
-// Ensure schema columns exist
-$columns = $db->query("PRAGMA table_info(settings)")->fetchAll(PDO::FETCH_COLUMN, 1);
-if (!in_array('display_mode', $columns)) {
-    $db->exec("ALTER TABLE settings ADD COLUMN display_mode TEXT DEFAULT 'single'");
-}
-if (!in_array('carousel_duration', $columns)) {
-    $db->exec("ALTER TABLE settings ADD COLUMN carousel_duration INTEGER DEFAULT 5");
-}
+// Ensure image_flags table exists
+$db->exec("CREATE TABLE IF NOT EXISTS image_flags (
+    filename TEXT PRIMARY KEY,
+    pc_enabled INTEGER DEFAULT 0,
+    mobile_enabled INTEGER DEFAULT 0
+)");
 
-// Ensure at least one settings row
-if ($db->query("SELECT COUNT(*) FROM settings")->fetchColumn() == 0) {
-    $db->exec("INSERT INTO settings (pc_image, mobile_image, display_mode, carousel_duration) VALUES (NULL, NULL, 'single', 5)");
-}
+// Force mode to carousel
+$db->exec("UPDATE settings SET display_mode = 'carousel'");
 
 function random_filename($ext) {
     return substr(str_shuffle('abcdefghijklmnopqrstuvwxyz0123456789'), 0, 6) . '.' . $ext;
@@ -35,7 +31,7 @@ function random_filename($ext) {
 
 $host = $_SERVER['HTTP_HOST'] ?? gethostname();
 
-// Handle file upload
+// Upload
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['image'])) {
     $file = $_FILES['image'];
     if ($file['error'] === UPLOAD_ERR_OK) {
@@ -49,90 +45,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['image'])) {
         } else {
             $filename = random_filename($ext);
             move_uploaded_file($file['tmp_name'], $uploadDir . $filename);
-            $message = "✅ Image uploaded successfully: " . htmlspecialchars($filename);
+            $stmt = $db->prepare("INSERT INTO image_flags (filename) VALUES (?)");
+            $stmt->execute([$filename]);
+            $message = "✅ Uploaded: " . htmlspecialchars($filename);
         }
     } else {
         $message = "⚠️ Upload failed.";
     }
 }
 
-// Handle delete
+// Delete
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete'])) {
     $filename = basename($_POST['delete']);
     $target = $uploadDir . $filename;
-    if (is_file($target)) {
-        unlink($target);
-        $message = "🗑️ Deleted image: " . htmlspecialchars($filename);
-    }
+    if (is_file($target)) unlink($target);
+    $db->prepare("DELETE FROM image_flags WHERE filename = ?")->execute([$filename]);
+    $message = "🗑️ Deleted: " . htmlspecialchars($filename);
 }
 
-// Handle PC/Mobile assignment
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_image'], $_POST['type'])) {
-    $type = $_POST['type'] === 'pc' ? 'pc_image' : 'mobile_image';
-    $stmt = $db->prepare("UPDATE settings SET $type = ?");
-    $stmt->execute([$_POST['set_image']]);
-    $message = "✅ " . ucfirst($type) . " set to " . htmlspecialchars($_POST['set_image']);
+// Handle PC/Mobile toggle (multi-select)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_type'], $_POST['image_name'])) {
+    $type = $_POST['toggle_type'];
+    // Checkbox only sends "on" if checked — undefined otherwise
+    $flag = (!empty($_POST['toggle_state']) && $_POST['toggle_state'] === 'on') ? 1 : 0;
+
+    $stmt = $db->prepare("INSERT INTO image_flags (filename, {$type}_enabled)
+                          VALUES (?, ?)
+                          ON CONFLICT(filename) DO UPDATE SET {$type}_enabled = ?");
+    $stmt->execute([$_POST['image_name'], $flag, $flag]);
+
+    $message = $flag ? "✅ Enabled for $type" : "❎ Disabled for $type";
 }
 
-// Handle display mode change
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['display_mode'])) {
-    $mode = in_array($_POST['display_mode'], ['single', 'carousel']) ? $_POST['display_mode'] : 'single';
-    $stmt = $db->prepare("UPDATE settings SET display_mode = ?");
-    $stmt->execute([$mode]);
-    $message = "✅ Display mode updated to " . ucfirst($mode) . ".";
-}
 
-// Handle carousel duration change
+// Carousel duration
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['carousel_duration'])) {
-    $duration = max(1, intval($_POST['carousel_duration'])); // minimum 1 second
-    $stmt = $db->prepare("UPDATE settings SET carousel_duration = ?");
-    $stmt->execute([$duration]);
-    $message = "✅ Carousel duration set to {$duration}s.";
+    $duration = max(1, intval($_POST['carousel_duration']));
+    $db->prepare("UPDATE settings SET carousel_duration = ?")->execute([$duration]);
+    $message = "✅ Duration set to {$duration}s.";
 }
 
-// Handle password change
+// Password change
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['old_pass'], $_POST['new_pass'], $_POST['confirm_pass'])) {
-    $old = $_POST['old_pass'];
-    $new = $_POST['new_pass'];
-    $confirm = $_POST['confirm_pass'];
-
     $stmt = $db->prepare("SELECT * FROM users WHERE username = ?");
     $stmt->execute([$_SERVER['PHP_AUTH_USER']]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    $old = $_POST['old_pass']; $new = $_POST['new_pass']; $confirm = $_POST['confirm_pass'];
 
-    if (!$user || !password_verify($old, $user['password'])) {
-        $message = "❌ Incorrect current password.";
-    } elseif ($new !== $confirm) {
-        $message = "⚠️ New passwords do not match.";
-    } elseif (strlen($new) < 6) {
-        $message = "⚠️ Password must be at least 6 characters.";
-    } else {
+    if (!$user || !password_verify($old, $user['password'])) $message = "❌ Incorrect password.";
+    elseif ($new !== $confirm) $message = "⚠️ Passwords do not match.";
+    elseif (strlen($new) < 6) $message = "⚠️ Too short.";
+    else {
         $hash = password_hash($new, PASSWORD_DEFAULT);
-        $update = $db->prepare("UPDATE users SET password = ? WHERE username = ?");
-        $update->execute([$hash, $_SERVER['PHP_AUTH_USER']]);
-        $message = "✅ Password changed successfully.";
+        $db->prepare("UPDATE users SET password = ? WHERE username = ?")->execute([$hash, $_SERVER['PHP_AUTH_USER']]);
+        $message = "✅ Password changed.";
     }
 }
 
-// Load settings and images
+// Load
 $settings = $db->query("SELECT * FROM settings LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 $images = array_values(array_diff(scandir($uploadDir), ['.', '..']));
+$flags = $db->query("SELECT * FROM image_flags")->fetchAll(PDO::FETCH_UNIQUE|PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Payment Reminder - Image Upload</title>
+    <title>Payment Reminder Seetings</title>
     <link href="./src/bootstrap.min.css" rel="stylesheet">
-    <link href="./src/bootstrap-icons.css" rel="stylesheet">
+    <script src="./src/bootstrap.bundle.min.js"></script>
+    <style>
+        .form-switch .form-check-input { cursor: pointer; }
+    </style>
 </head>
 <body class="bg-light">
 <div class="container py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="m-0">Payment Reminder Admin</h2>
-        <span class="badge bg-secondary">
-            Mode: <?= htmlspecialchars(ucfirst($settings['display_mode'] ?? 'Single')) ?>
-        </span>
+        <h2 class="m-0">Payment Reminder Hosting</h2>
+        <span><a href="https://kintoyyy.com" class="badge bg-secondary">Created by Kintoyyy</a></span>
+        
     </div>
 
     <?php if (!empty($message)): ?>
@@ -153,32 +144,14 @@ $images = array_values(array_diff(scandir($uploadDir), ['.', '..']));
         </div>
     </div>
 
-    <!-- Display Mode & Carousel Duration -->
+    <!-- Carousel Duration -->
     <div class="card mb-4 shadow-sm">
         <div class="card-body">
-            <h5>Display Settings</h5>
-            <form method="POST" class="row g-3 align-items-center mt-2">
-                <div class="col-auto">
-                    <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="radio" name="display_mode" value="single"
-                            <?= ($settings['display_mode'] ?? 'single') === 'single' ? 'checked' : '' ?>>
-                        <label class="form-check-label">Single Image</label>
-                    </div>
-                    <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="radio" name="display_mode" value="carousel"
-                            <?= ($settings['display_mode'] ?? '') === 'carousel' ? 'checked' : '' ?>>
-                        <label class="form-check-label">Carousel</label>
-                    </div>
-                </div>
-                <div class="col-auto">
-                    <input type="number" name="carousel_duration" value="<?= htmlspecialchars($settings['carousel_duration'] ?? 5) ?>" min="1" class="form-control form-control-sm" style="width: 90px;" title="Duration in seconds">
-                </div>
-                <div class="col-auto">
-                    <span class="text-muted">seconds per slide</span>
-                </div>
-                <div class="col-auto">
-                    <button type="submit" class="btn btn-sm btn-outline-secondary">Save</button>
-                </div>
+            <h5>Carousel Duration</h5>
+            <form method="POST" class="mt-3 d-flex align-items-center">
+                <input type="number" name="carousel_duration" value="<?= htmlspecialchars($settings['carousel_duration']) ?>" min="1" class="form-control form-control-sm me-2" style="width: 90px;">
+                <span class="text-muted me-3">seconds per slide</span>
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Save</button>
             </form>
         </div>
     </div>
@@ -188,50 +161,57 @@ $images = array_values(array_diff(scandir($uploadDir), ['.', '..']));
         <div class="card-body">
             <h5>Hosted Images</h5>
             <?php if ($images): ?>
-                <table class="table table-bordered table-hover mt-3 align-middle">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Preview</th>
-                            <th>Filename</th>
-                            <th>Used For</th>
-                            <th>Direct Link</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($images as $img):
-                            $isPc = $settings['pc_image'] === $img;
-                            $isMobile = $settings['mobile_image'] === $img;
-                        ?>
-                        <tr>
-                            <td><img src="uploads/<?= htmlspecialchars($img) ?>" class="img-thumbnail" style="max-width: 100px;"></td>
-                            <td><?= htmlspecialchars($img) ?></td>
-                            <td>
-                                <?php if ($isPc): ?><i class="bi bi-pc-display text-primary fs-5" title="PC Image"></i><?php endif; ?>
-                                <?php if ($isMobile): ?><i class="bi bi-phone text-success fs-5 ms-2" title="Mobile Image"></i><?php endif; ?>
-                                <?php if (!$isPc && !$isMobile): ?><i class="bi bi-x-circle text-muted fs-5" title="Not used"></i><?php endif; ?>
-                            </td>
-                            <td><a href="http://<?= htmlspecialchars($host) ?>/uploads/<?= htmlspecialchars($img) ?>" target="_blank" class="text-decoration-none small">http://<?= htmlspecialchars($host) ?>/uploads/<?= htmlspecialchars($img) ?></a></td>
-                            <td>
-                                <form method="POST" class="d-inline">
-                                    <input type="hidden" name="delete" value="<?= htmlspecialchars($img) ?>">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                                </form>
-                                <form method="POST" class="d-inline">
-                                    <input type="hidden" name="set_image" value="<?= htmlspecialchars($img) ?>">
-                                    <input type="hidden" name="type" value="pc">
-                                    <button type="submit" class="btn btn-sm btn-outline-primary">Set PC</button>
-                                </form>
-                                <form method="POST" class="d-inline">
-                                    <input type="hidden" name="set_image" value="<?= htmlspecialchars($img) ?>">
-                                    <input type="hidden" name="type" value="mobile">
-                                    <button type="submit" class="btn btn-sm btn-outline-success">Set Mobile</button>
-                                </form>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+            <table class="table table-bordered table-hover mt-3 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Preview</th>
+                        <th>Filename</th>
+                        <th class="text-center">PC</th>
+                        <th class="text-center">Mobile</th>
+                        <th>Link</th>
+                        <th>Delete</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($images as $img): 
+                        $f = $flags[$img] ?? ['pc_enabled'=>0,'mobile_enabled'=>0];
+                    ?>
+                    <tr>
+                        <td><img src="uploads/<?= htmlspecialchars($img) ?>" class="img-thumbnail" style="max-width: 100px;"></td>
+                        <td><?= htmlspecialchars($img) ?></td>
+                        <td class="text-center">
+                            <form method="POST">
+                                <input type="hidden" name="toggle_type" value="pc">
+                                <input type="hidden" name="image_name" value="<?= htmlspecialchars($img) ?>">
+                                <div class="form-check form-switch d-inline-block">
+                                    <input class="form-check-input" type="checkbox" name="toggle_state"
+                                        <?= $f['pc_enabled'] ? 'checked' : '' ?>
+                                        onchange="this.form.submit()">
+                                </div>
+                            </form>
+                        </td>
+                        <td class="text-center">
+                            <form method="POST">
+                                <input type="hidden" name="toggle_type" value="mobile">
+                                <input type="hidden" name="image_name" value="<?= htmlspecialchars($img) ?>">
+                                <div class="form-check form-switch d-inline-block">
+                                    <input class="form-check-input" type="checkbox" name="toggle_state"
+                                        <?= $f['mobile_enabled'] ? 'checked' : '' ?>
+                                        onchange="this.form.submit()">
+                                </div>
+                            </form>
+                        </td>
+                        <td><a href="http://<?= htmlspecialchars($host) ?>/uploads/<?= htmlspecialchars($img) ?>" target="_blank" class="small text-decoration-none">View</a></td>
+                        <td>
+                            <form method="POST">
+                                <input type="hidden" name="delete" value="<?= htmlspecialchars($img) ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
             <?php else: ?>
                 <p class="text-muted mt-3">No images uploaded yet.</p>
             <?php endif; ?>
@@ -259,7 +239,6 @@ $images = array_values(array_diff(scandir($uploadDir), ['.', '..']));
             </form>
         </div>
     </div>
-
 </div>
 </body>
 </html>
